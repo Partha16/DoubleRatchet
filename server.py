@@ -5,26 +5,36 @@ import time
 msgQueues = {}
 sendLoops = {}
 activeUsers = {}
-
+keys = {}
 localIP     = "127.0.0.1"
 localPort   = 20001
-bufferSize  = 1024
-
+bufferSize  = 16384
+current_sender = None
 
 
 UDPServerSocket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
 UDPServerSocket.bind((localIP, localPort))
 
-print(f"UDP to {localIP} server up and listening")
+print(f"[Server] : UDP server up and listening")
 
 
 def send(source, destination):
+    global current_sender
+    requested = False
     while len(msgQueues[(source,destination)]) != 0:   
         message = msgQueues[(source,destination)].pop()
         bytesToSend = str.encode(str(source) +"|"+message)
         while not activeUsers[destination]:
             time.sleep(1)
-        UDPServerSocket.sendto(bytesToSend, destination)
+        if current_sender != source and not requested:
+            #request dummy
+            UDPServerSocket.sendto(str.encode(f"request-dummy|{source}"),current_sender)
+            requested = True
+        else:
+            UDPServerSocket.sendto(bytesToSend, destination)
+            msgQueues[(source,destination)]
+            current_sender = destination
+            requested = False
         print(f"[SERVER] SOURCE : {source}, DESTINATION : {destination}, MSG : {message}")
         
        
@@ -46,11 +56,27 @@ try:
             bytesAddressPair = UDPServerSocket.recvfrom(bufferSize)
             data = bytesAddressPair[0].decode('utf-8')
             address = bytesAddressPair[1]
-            destination,message = data.split("|")
+            i = data.find("|")
+            destination = data [:i]
+            message = data [i+1:]
             if destination=="set":
                 activeUsers[address] = message=="active"
                 UDPServerSocket.sendto(*bytesAddressPair)
                 print(f"[SERVER] : {address} {message}")
+            elif destination=="keys":
+                keysdata = eval(message)
+                keys[address] = keysdata
+                if "EphemeralKey" in keysdata.keys():
+                    current_sender = address
+                print(f"[SERVER] : ({address} , {keysdata})")
+            elif destination=="reqkeys":
+                reqaddr = eval(message)
+                if reqaddr in keys.keys():
+                    UDPServerSocket.sendto(str.encode(str(keys[reqaddr])),address)
+                    print(f"[SERVER] ({reqaddr} , {keys[reqaddr]})")
+                else:
+                    UDPServerSocket.sendto(str.encode('None'),address)
+
             else:
                 destination = eval(destination)
                 if destination not in activeUsers.keys():
